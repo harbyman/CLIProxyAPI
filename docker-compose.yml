@@ -2,6 +2,7 @@ services:
   cli-proxy-api:
     image: ${CLI_PROXY_IMAGE:-eceasy/cli-proxy-api:latest}
     pull_policy: always
+
     build:
       context: .
       dockerfile: Dockerfile
@@ -31,5 +32,20 @@ services:
       - ${CLI_PROXY_AUTH_PATH:-./auths}:/root/.cli-proxy-api
       - ${CLI_PROXY_LOG_PATH:-./logs}:/CLIProxyAPI/logs
       - ${CLI_PROXY_PLUGIN_PATH:-./plugins}:/CLIProxyAPI/plugins
+
+    depends_on:
+      - socks5
+
+    restart: unless-stopped
+
+
+  socks5:
+    image: serjs/go-socks5-proxy:latest
+    pull_policy: always
+
+    environment:
+      PROXY_PORT: "1080"
+      PROXY_LISTEN_IP: "0.0.0.0"
+      REQUIRE_AUTH: "false"
 
     restart: unless-stopped
