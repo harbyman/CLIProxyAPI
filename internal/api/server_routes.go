@@ -184,7 +184,7 @@ func (s *Server) setupRoutes() {
 		c.String(http.StatusOK, oauthCallbackSuccessHTML)
 	})
 
-	s.engine.GET("/devin/callback", func(c *gin.Context) {
+	devinCallbackHandler := func(c *gin.Context) {
 		c.Header("Cache-Control", "no-store")
 		code := strings.TrimSpace(c.Query("code"))
 		state := strings.TrimSpace(c.Query("state"))
@@ -202,7 +202,10 @@ func (s *Server) setupRoutes() {
 		}
 		c.Header("Content-Type", "text/html; charset=utf-8")
 		c.String(http.StatusOK, oauthCallbackSuccessHTML)
-	})
+	}
+
+	s.engine.GET("/callback", devinCallbackHandler)
+	s.engine.GET("/devin/callback", devinCallbackHandler)
 
 	// Management routes are registered lazily by registerManagementRoutes when a secret is configured.
 }
@@ -686,7 +689,13 @@ func (s *Server) handleHomeCodexClientModels(c *gin.Context, clientVersion strin
 	if clientVersion == "cpa" {
 		webSearchCapabilityForModel = homeWebSearchCapabilityForModel(entries)
 	}
-	s.writeModelListResponse(c, "openai", codexmodels.BuildResponseForClientWithCPACapabilities(models, nil, webSearchCapabilityForModel, s.cfg.Codex.OptimizeMultiAgentV2, clientVersion))
+	payload := codexmodels.BuildResponseForClientWithCPACapabilities(models, nil, webSearchCapabilityForModel, s.cfg.Codex.OptimizeMultiAgentV2, clientVersion)
+	body, errMarshal := codexmodels.MarshalCompact(payload)
+	if errMarshal != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": errMarshal.Error()})
+		return
+	}
+	s.writeModelListResponse(c, "openai", body)
 }
 
 func homeWebSearchCapabilityForModel(entries []homeModelEntry) codexmodels.WebSearchCapabilityForModelFunc {
@@ -709,6 +718,12 @@ func formatHomeCodexModel(entry homeModelEntry) map[string]any {
 	}
 	if entry.ownedBy != "" {
 		model["owned_by"] = entry.ownedBy
+	}
+	for _, p := range entry.providers {
+		if strings.EqualFold(p, "devin") {
+			model["type"] = "devin"
+			break
+		}
 	}
 	if entry.displayName != "" {
 		model["display_name"] = entry.displayName

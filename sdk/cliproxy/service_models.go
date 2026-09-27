@@ -29,8 +29,18 @@ func (s *Service) registerModelsForAuthWithCache(ctx context.Context, a *coreaut
 		return
 	}
 	if a.Disabled {
+		if s != nil && s.coreManager != nil {
+			if current, ok := s.coreManager.GetByID(a.ID); ok && current != nil && !current.Disabled {
+				return
+			}
+		}
 		GlobalModelRegistry().UnregisterClient(a.ID)
 		return
+	}
+	if s != nil && s.coreManager != nil {
+		if current, ok := s.coreManager.GetByID(a.ID); !ok || current == nil || current.Disabled {
+			return
+		}
 	}
 	authKind := a.AuthKind()
 	// Unregister legacy client ID (if present) to avoid double counting
@@ -140,7 +150,7 @@ func (s *Service) registerModelsForAuthWithCache(ctx context.Context, a *coreaut
 			models = registry.GetCodexProModels()
 		}
 		models = applyExcludedModels(models, excluded)
-	case "kimi":
+	case "kimi", "kimi-ai", "kimi.ai", "kimi.com":
 		models = registry.GetKimiModels()
 		models = applyExcludedModels(models, excluded)
 	case "xai":
@@ -156,6 +166,17 @@ func (s *Service) registerModelsForAuthWithCache(ctx context.Context, a *coreaut
 		models = applyExcludedModels(models, excluded)
 	case "devin":
 		models = registry.GetDevinModels()
+		models = applyExcludedModels(models, excluded)
+	case "meta":
+		models = registry.GetMetaModels()
+		if entry := s.resolveConfigMetaKey(a); entry != nil {
+			if len(entry.Models) > 0 {
+				models = buildMetaConfigModels(entry)
+			}
+			if authKind == "apikey" {
+				excluded = entry.ExcludedModels
+			}
+		}
 		models = applyExcludedModels(models, excluded)
 	default:
 		// Handle OpenAI-compatibility providers by name using config
@@ -497,6 +518,13 @@ func (s *Service) resolveConfigXAIKey(auth *coreauth.Auth) *config.XAIKey {
 		return nil
 	}
 	return resolveConfigCodexStyleKey(auth, s.cfg.XAIKey, false)
+}
+
+func (s *Service) resolveConfigMetaKey(auth *coreauth.Auth) *config.MetaKey {
+	if s == nil || s.cfg == nil {
+		return nil
+	}
+	return resolveConfigCodexStyleKey(auth, s.cfg.MetaKey, false)
 }
 
 func resolveConfigCodexStyleKey(auth *coreauth.Auth, entries []config.CodexKey, validateIndexCredentials bool) *config.CodexKey {
@@ -858,16 +886,30 @@ func buildXAIConfigModels(entry *config.XAIKey) []*ModelInfo {
 	return buildConfigModels(entry.Models, "xai", "xai", "xai")
 }
 
+func buildMetaConfigModels(entry *config.MetaKey) []*ModelInfo {
+	if entry == nil {
+		return nil
+	}
+	return buildConfigModels(entry.Models, "meta", "meta", "meta")
+}
+
 func buildCodexConfigModels(entry *config.CodexKey) []*ModelInfo {
 	if entry == nil {
 		return nil
 	}
 	if len(entry.Models) == 0 {
-		return registry.GetCodexProModels()
+		models := registry.GetCodexProModels()
+		for _, model := range models {
+			if model != nil {
+				model.SupportConfigurationUpdate = false
+			}
+		}
+		return models
 	}
 
 	models := buildConfigModels(entry.Models, "openai", "openai", "codex")
 	configuredDisplayNames := make(map[string]string, len(entry.Models))
+	configuredConfigurationUpdates := make(map[string]bool, len(entry.Models))
 	seenConfiguredModels := make(map[string]struct{}, len(entry.Models))
 	for i := range entry.Models {
 		model := entry.Models[i]
@@ -883,6 +925,7 @@ func buildCodexConfigModels(entry *config.CodexKey) []*ModelInfo {
 			continue
 		}
 		seenConfiguredModels[key] = struct{}{}
+		configuredConfigurationUpdates[key] = model.SupportConfigurationUpdate
 
 		displayName := strings.TrimSpace(model.DisplayName)
 		if displayName != "" {
@@ -893,9 +936,11 @@ func buildCodexConfigModels(entry *config.CodexKey) []*ModelInfo {
 		if model == nil {
 			continue
 		}
-		if displayName, ok := configuredDisplayNames[strings.ToLower(model.ID)]; ok {
+		key := strings.ToLower(model.ID)
+		if displayName, ok := configuredDisplayNames[key]; ok {
 			model.DisplayName = displayName
 		}
+		model.SupportConfigurationUpdate = configuredConfigurationUpdates[key]
 	}
 	return models
 }
